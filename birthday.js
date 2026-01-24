@@ -21,18 +21,12 @@ function getName(person) {
     
 }
 function getDescription(person) {
+    if (!person || !person.text) return null;
+    const personText = person.text;
+    const parts = personText.split(',');
+    const description = parts[1] ? parts[1].trim() : null;
+    return description;
 
-    if (person.text) {
-        const personText = person.text;  // Extract the 'text' field
-        const description = personText.split(',')[1];  // Split the text by comma and get the name (first part)
-        if (!description) {
-            return null;  // If there's no description part, return null
-        }
-        return description.trim();  // Remove any extra spaces around the description
-      } else {
-        return null;  // Return null if 'text' is not available
-      }
-    
 }
 
 function getDate(person) {
@@ -43,6 +37,29 @@ function getDate(person) {
         return null;  // Return null if 'text' is not available
     }
     
+}
+
+// Heuristic importance scoring (fast, no extra requests)
+function computeImportance(person) {
+  let score = 0;
+
+  // pages length (more linked pages -> slightly higher)
+  if (Array.isArray(person.pages)) {
+    score += Math.min(person.pages.length, 5) * 3;
+  }
+
+  // thumbnail or originalimage presence on any page
+  const hasImage = Array.isArray(person.pages) && person.pages.some(p => p.thumbnail || p.originalimage || (p.originalimage && p.originalimage.source));
+  if (hasImage) score += 5;
+
+  // description presence
+  if (getDescription(person)) score += 2;
+
+  // extract length (longer extract -> likely more notable)
+  const extract = (person.pages && person.pages[0] && person.pages[0].extract) || '';
+  score += Math.min(4, Math.floor(extract.length / 200));
+
+  return score;
 }
 
 function fetchPersonImage(person) {
@@ -74,12 +91,50 @@ const targetUrl = 'https://en.wikipedia.org/api/rest_v1/feed/onthisday/births/' 
 // Fetch the data from the API using the proxy
 fetch(targetUrl)
   .then(response => response.json())  // Convert the response to JSON
-  .then(data => {
+  .then(async data => {
     // Extract the births data (assuming the structure based on the API)
     const births = data.births;
 
-    // Sort the births array by view_count in descending order
-    const top6 = births.sort((a, b) => b.view_count - a.view_count).slice(0, 6);
+    // Sort the births array by heuristic importance in descending order
+    const scored = births.map(p => ({ person: p, score: computeImportance(p) }));
+    scored.sort((a, b) => b.score - a.score);
+
+    // Async refinement: fetch Wikidata sitelinks count for top candidates
+    // This boosts globally notable figures (many language sitelinks), e.g., Mahatma Gandhi.
+    async function fetchWikidataSitelinksCount(qid) {
+      if (!qid) return 0;
+      try {
+        const url = `https://www.wikidata.org/wiki/Special:EntityData/${encodeURIComponent(qid)}.json`;
+        const resp = await fetch(url);
+        if (!resp.ok) return 0;
+        const data = await resp.json();
+        const entity = data.entities && data.entities[qid];
+        if (!entity || !entity.sitelinks) return 0;
+        return Object.keys(entity.sitelinks).length;
+      } catch (e) {
+        return 0;
+      }
+    }
+
+    async function refineTopCandidates(scoredList, candidateCount = 20) {
+      const candidates = scoredList.slice(0, candidateCount);
+      await Promise.all(candidates.map(async entry => {
+        const person = entry.person;
+        // Try to find a wikibase_item on the first page
+        const qid = (person.pages && person.pages[0] && person.pages[0].wikibase_item) || person.wikibase_item || null;
+        const sitelinks = await fetchWikidataSitelinksCount(qid);
+        if (sitelinks > 0) {
+          // Add a boost based on sitelinks (cap influence)
+          entry.score += Math.min(200, sitelinks) * 0.05; // each 20 sitelinks -> +1 point
+        }
+      }));
+      candidates.sort((a, b) => b.score - a.score);
+      return candidates;
+    }
+
+    // Run refinement and pick final top 6
+    const refined = await refineTopCandidates(scored, 20);
+    const top6 = refined.slice(0, 6).map(s => s.person);
 
     // Display the top 6 most viewed in the console
     console.log('Top 6 Most Viewed Births Today:', top6);
