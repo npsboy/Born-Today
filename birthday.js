@@ -10,6 +10,9 @@ function getName(person) {
 
     if (person.text) {
         const personText = person.text;  // Extract the 'text' field
+        if (!personText.includes(',')) {
+            return personText.trim();  // If there's no comma, return the whole text as name
+        }
         const name = personText.split(',')[0];  // Split the text by comma and get the name (first part)
         return name.trim();  // Remove any extra spaces around the name
       } else {
@@ -22,7 +25,10 @@ function getDescription(person) {
     if (person.text) {
         const personText = person.text;  // Extract the 'text' field
         const description = personText.split(',')[1];  // Split the text by comma and get the name (first part)
-        return description.trim();  // Remove any extra spaces around the name
+        if (!description) {
+            return null;  // If there's no description part, return null
+        }
+        return description.trim();  // Remove any extra spaces around the description
       } else {
         return null;  // Return null if 'text' is not available
       }
