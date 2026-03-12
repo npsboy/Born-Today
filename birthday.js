@@ -29,6 +29,19 @@ function getDescription(person) {
 
 }
 
+function getWikipediaLink(person) {
+
+    if (person.pages && person.pages.length > 0) {
+        const page = person.pages[0];  // Get the first page
+        const content_urls = page.content_urls;
+        if (content_urls && content_urls.desktop && content_urls.desktop.page) {
+            return content_urls.desktop.page;  // Return the desktop page URL
+        } else {
+            return null;  // Return null if the URL is not available
+        }
+    }
+}
+
 function getDate(person) {
 
     if (person.year) {
@@ -171,12 +184,19 @@ fetch(targetUrl)
         const birthdayText = document.createElement('p');
         birthdayText.textContent = `Birthday:` + getDate(person);
 
+        const wikipediaLink = getWikipediaLink(person);
+
         // Append everything to the card
         card.appendChild(img);
         card.appendChild(name);
         card.appendChild(descriptionText);
         card.appendChild(birthdayText);
 
+        card.addEventListener('click', () => {
+            if (wikipediaLink) {
+                window.open(wikipediaLink, '_blank'); // Open the Wikipedia page in a new tab
+            }
+        });
         // Append the card to the container
         container.appendChild(card);
 
