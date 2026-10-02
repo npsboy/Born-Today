@@ -4,13 +4,29 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Who's Birthday</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;1,400&family=Inter:wght@400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <h1>Born Today</h1>
-    <h3>Top 6 Most Famous People Born Today</h3>
+    <header class="masthead">
+        <p class="eyebrow" id="todayDate">&nbsp;</p>
+        <h1>Born <em>Today</em></h1>
+        <div class="rule"></div>
+        <p class="subtitle">The six most celebrated people born on this day</p>
+    </header>
 
-    <div id="cardsContainer" class="cards-container"></div>
+    <main>
+        <div id="loader" class="loader" role="status" aria-live="polite">
+            <div class="loader-line"><span></span></div>
+            <p class="loader-text">Consulting the archives<span class="dots"></span></p>
+        </div>
+
+        <div id="cardsContainer" class="cards-container"></div>
+    </main>
+
+    <footer class="footer">Source: Wikipedia &amp; Wikidata</footer>
 
     <script src="birthday.js"></script>
 </body>

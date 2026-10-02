@@ -5,6 +5,57 @@ const today = new Date();
 const day = today.getDate();  // Day of the month (1-31)
 const month = today.getMonth() + 1;  // Month (0-11, so add 1 to get 1-12)
 
+document.getElementById('todayDate').textContent =
+    today.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+
+// Scroll through everyone born today (thumbnails come with the feed) while rankings are computed
+function startFlash(births) {
+    const loader = document.getElementById('loader');
+    const items = births
+        .map(p => ({ name: getName(p), src: p.pages && p.pages[0] && p.pages[0].thumbnail && p.pages[0].thumbnail.source }))
+        .filter(x => x.src && x.name);
+    if (!loader || items.length === 0) return;
+
+    for (let i = items.length - 1; i > 0; i--) {  // shuffle
+        const j = Math.floor(Math.random() * (i + 1));
+        [items[i], items[j]] = [items[j], items[i]];
+    }
+    const shown = items.slice(0, 40);
+
+    // Repeat the set until one half of the track is wider than the viewport,
+    // then duplicate it so the -50% translate loops seamlessly
+    const half = [];
+    while (half.length < 14) half.push(...shown);
+
+    const buildFigure = item => {
+        const fig = document.createElement('figure');
+        const img = document.createElement('img');
+        img.src = item.src;
+        img.alt = '';
+        const caption = document.createElement('figcaption');
+        caption.textContent = item.name;
+        fig.appendChild(img);
+        fig.appendChild(caption);
+        return fig;
+    };
+
+    const track = document.createElement('div');
+    track.classList.add('marquee-track');
+    track.style.animationDuration = (half.length * 1.1) + 's';
+    [...half, ...half].forEach(item => track.appendChild(buildFigure(item)));
+
+    const marquee = document.createElement('div');
+    marquee.classList.add('marquee');
+    marquee.appendChild(track);
+    loader.prepend(marquee);
+}
+
+function hideLoader() {
+    const loader = document.getElementById('loader');
+    loader.classList.add('done');
+    setTimeout(() => loader.remove(), 500);
+}
+
 
 function getName(person) {
 
@@ -20,13 +71,54 @@ function getName(person) {
       }
     
 }
-function getDescription(person) {
-    if (!person || !person.text) return null;
-    const personText = person.text;
-    const parts = personText.split(',');
-    const description = parts[1] ? parts[1].trim() : null;
-    return description;
+const OFFICE_REGEX = /\b((?:Deputy |Vice[- ])?(?:Prime Minister|President|Premier|Chancellor)\b[^,]*)/i;
 
+function wordCount(str) {
+    return str ? str.split(/\s+/).filter(Boolean).length : 0;
+}
+
+// Wikipedia short description with trailing "(born 1991)" / "(1944–2024)" removed
+function getWikiDescription(person) {
+    const page = person.pages && person.pages[0];
+    if (!page || !page.description) return null;
+    const cleaned = page.description.replace(/\s*\([^)]*\d{4}[^)]*\)\s*$/, '').trim();
+    return cleaned || null;
+}
+
+// Everything after the name in the On This Day text, minus "(died ...)" and trailing period
+function getTextDescription(person) {
+    if (!person || !person.text) return null;
+    const idx = person.text.indexOf(',');
+    if (idx === -1) return null;
+    const cleaned = person.text.slice(idx + 1)
+        .replace(/\s*\(\s*died[^)]*\)\s*$/i, '')
+        .replace(/\.\s*$/, '')
+        .trim();
+    return cleaned || null;
+}
+
+function getDescription(person) {
+    const wiki = getWikiDescription(person);
+    const text = getTextDescription(person);
+
+    let description = wiki || text;
+
+    // Vague wiki description ("Musical artist", "American singer"): prefer the fuller text if it says more
+    if (wiki && text) {
+        const genericArtist = /\bartist$/i.test(wiki);
+        const tooShort = wordCount(wiki) < 3 && wordCount(text) > wordCount(wiki);
+        if (genericArtist || tooShort) description = text;
+    }
+
+    // Surface a top office (e.g. Prime Minister of Estonia) if the chosen description lacks it
+    if (description && text) {
+        const office = text.match(OFFICE_REGEX);
+        if (office && !OFFICE_REGEX.test(description)) {
+            description += ', ' + office[1].trim();
+        }
+    }
+
+    return description || null;
 }
 
 function getWikipediaLink(person) {
@@ -107,6 +199,7 @@ fetch(targetUrl)
   .then(async data => {
     // Extract the births data (assuming the structure based on the API)
     const births = data.births;
+    startFlash(births);
 
     // Sort the births array by heuristic importance in descending order
     const scored = births.map(p => ({ person: p, score: computeImportance(p) }));
@@ -234,57 +327,82 @@ fetch(targetUrl)
     console.log('Top 6 Most Viewed Births Today:', top6);
 
     // Optionally, display the top 6 in the webpage
-    top6.forEach(person => {
-        console.log(person.pages);
+    const container = document.getElementById('cardsContainer');
 
-        const container = document.getElementById('cardsContainer');
+    top6.forEach((person, i) => {
+        console.log(person.pages);
 
         // Create a card container
         const card = document.createElement('div');
         card.classList.add('card');
+        card.style.setProperty('--i', i);
+        card.tabIndex = 0;
 
         // Add the person's image
+        const photo = document.createElement('div');
+        photo.classList.add('photo');
         const img = document.createElement('img');
-        person_name= getName(person);
+        const person_name = getName(person);
+        img.addEventListener('load', () => img.classList.add('loaded'));
         fetchPersonImage(person_name).then(imageUrl => {
             img.src = imageUrl // Logs the image URL or default image
           });
 
-        img.alt = getName(person); // Use the name as the alt text
+        img.alt = person_name; // Use the name as the alt text
+        photo.appendChild(img);
+
+        // Editorial numbering
+        const index = document.createElement('span');
+        index.classList.add('index');
+        index.textContent = 'No. ' + (i + 1);
 
         // Add name and occupation (or description after the comma)
         const name = document.createElement('h2');
-        name.textContent = getName(person);
+        name.textContent = person_name;
 
         // Extract the occupation or description (if available)
         const description = getDescription(person) || 'No description available';
         const descriptionText = document.createElement('p');
+        descriptionText.classList.add('desc');
         descriptionText.textContent = description;
 
         // Add birthday in dd-mm-yyyy format
         const birthdayText = document.createElement('p');
-        birthdayText.textContent = `Birthday:` + getDate(person);
+        birthdayText.classList.add('born');
+        birthdayText.textContent = `Born ` + getDate(person);
 
         const wikipediaLink = getWikipediaLink(person);
 
         // Append everything to the card
-        card.appendChild(img);
+        card.appendChild(photo);
+        card.appendChild(index);
         card.appendChild(name);
         card.appendChild(descriptionText);
         card.appendChild(birthdayText);
 
-        card.addEventListener('click', () => {
+        const openPage = () => {
             if (wikipediaLink) {
                 window.open(wikipediaLink, '_blank'); // Open the Wikipedia page in a new tab
             }
+        };
+        card.addEventListener('click', openPage);
+        card.addEventListener('keydown', e => {
+            if (e.key === 'Enter') openPage();
         });
         // Append the card to the container
         container.appendChild(card);
 
     });
 
+    hideLoader();
+
   })
   .catch(error => {
     console.error('Error fetching data:', error);  // Handle any errors
+    const marquee = document.querySelector('.marquee');
+    if (marquee) marquee.remove();
+    const loader = document.getElementById('loader');
+    loader.classList.add('error');
+    loader.querySelector('.loader-text').textContent = 'Could not load today’s births. Please try again.';
   });
 
