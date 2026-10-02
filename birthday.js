@@ -112,41 +112,122 @@ fetch(targetUrl)
     const scored = births.map(p => ({ person: p, score: computeImportance(p) }));
     scored.sort((a, b) => b.score - a.score);
 
-    // Async refinement: fetch Wikidata sitelinks count for top candidates
-    // This boosts globally notable figures (many language sitelinks), e.g., Mahatma Gandhi.
-    async function fetchWikidataSitelinksCount(qid) {
-      if (!qid) return 0;
-      try {
-        const url = `https://www.wikidata.org/wiki/Special:EntityData/${encodeURIComponent(qid)}.json`;
-        const resp = await fetch(url);
-        if (!resp.ok) return 0;
-        const data = await resp.json();
-        const entity = data.entities && data.entities[qid];
-        if (!entity || !entity.sitelinks) return 0;
-        return Object.keys(entity.sitelinks).length;
-      } catch (e) {
-        return 0;
-      }
-    }
-
-    async function refineTopCandidates(scoredList, candidateCount = 20) {
-      const candidates = scoredList.slice(0, candidateCount);
-      await Promise.all(candidates.map(async entry => {
-        const person = entry.person;
-        // Try to find a wikibase_item on the first page
-        const qid = (person.pages && person.pages[0] && person.pages[0].wikibase_item) || person.wikibase_item || null;
-        const sitelinks = await fetchWikidataSitelinksCount(qid);
-        if (sitelinks > 0) {
-          // Add a boost based on sitelinks (cap influence)
-          entry.score += Math.min(200, sitelinks) * 0.05; // each 20 sitelinks -> +1 point
+    // Async refinement: fetch Wikidata sitelinks counts for ALL births, batched.
+    // The pages-based heuristic can badly underrate famous people (e.g., Mahatma Gandhi has
+    // only one linked page in the feed), so the sitelinks boost must apply to everyone.
+    // wbgetentities accepts up to 50 ids per request; origin=* enables CORS.
+    async function fetchWikidataSitelinksCounts(qids) {
+      const counts = {};
+      const batches = [];
+      for (let i = 0; i < qids.length; i += 50) batches.push(qids.slice(i, i + 50));
+      await Promise.all(batches.map(async batch => {
+        try {
+          const url = `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${batch.join('|')}&props=sitelinks&format=json&origin=*`;
+          const resp = await fetch(url);
+          if (!resp.ok) return;
+          const data = await resp.json();
+          for (const qid in (data.entities || {})) {
+            const sitelinks = data.entities[qid].sitelinks;
+            if (sitelinks) counts[qid] = Object.keys(sitelinks).length;
+          }
+        } catch (e) {
+          // Ignore failed batch; those people just get no boost
         }
       }));
-      candidates.sort((a, b) => b.score - a.score);
-      return candidates;
+      return counts;
+    }
+
+    function getQid(person) {
+      return (person.pages && person.pages[0] && person.pages[0].wikibase_item) || person.wikibase_item || null;
+    }
+
+    function getTitle(person) {
+      return (person.pages && person.pages[0] && person.pages[0].title) || null;
+    }
+
+    // Fetch Wikipedia article length (bytes) for each title, up to 50 titles per request.
+    // Returns a map keyed by the title as it appears in the feed (underscores).
+    async function fetchPageLengths(titles) {
+      const lengths = {};
+      const batches = [];
+      for (let i = 0; i < titles.length; i += 50) batches.push(titles.slice(i, i + 50));
+      await Promise.all(batches.map(async batch => {
+        try {
+          const spaced = batch.map(t => t.replace(/_/g, ' '));
+          const url = `https://en.wikipedia.org/w/api.php?action=query&prop=info&titles=${encodeURIComponent(spaced.join('|'))}&format=json&origin=*`;
+          const resp = await fetch(url);
+          if (!resp.ok) return;
+          const data = await resp.json();
+          const pages = (data.query && data.query.pages) || {};
+          for (const id in pages) {
+            if (pages[id].length) lengths[pages[id].title.replace(/ /g, '_')] = pages[id].length;
+          }
+        } catch (e) {
+          // Ignore failed batch; those people just get no length boost
+        }
+      }));
+      return lengths;
+    }
+
+    const REFERENCE_CANDIDATES = 30;
+
+    // Count <ref> tags in each article's wikitext, up to 50 titles per request.
+    // Returns a map keyed by the title as it appears in the feed (underscores).
+    async function fetchReferenceCounts(titles) {
+      const counts = {};
+      const batches = [];
+      for (let i = 0; i < titles.length; i += 50) batches.push(titles.slice(i, i + 50));
+      await Promise.all(batches.map(async batch => {
+        try {
+          const spaced = batch.map(t => t.replace(/_/g, ' '));
+          const url = `https://en.wikipedia.org/w/api.php?action=query&prop=revisions&rvprop=content&rvslots=main&titles=${encodeURIComponent(spaced.join('|'))}&format=json&formatversion=2&origin=*`;
+          const resp = await fetch(url);
+          if (!resp.ok) return;
+          const data = await resp.json();
+          const pages = (data.query && data.query.pages) || [];
+          pages.forEach(page => {
+            const wikitext = page.revisions && page.revisions[0].slots.main.content;
+            if (wikitext) counts[page.title.replace(/ /g, '_')] = (wikitext.match(/<ref[\s>\/]/g) || []).length;
+          });
+        } catch (e) {
+          // Ignore failed batch; those people just get no reference boost
+        }
+      }));
+      return counts;
+    }
+
+    async function refineCandidates(scoredList) {
+      const qids = [...new Set(scoredList.map(e => getQid(e.person)).filter(Boolean))];
+      const titles = [...new Set(scoredList.map(e => getTitle(e.person)).filter(Boolean))];
+      const [counts, lengths] = await Promise.all([
+        fetchWikidataSitelinksCounts(qids),
+        fetchPageLengths(titles)
+      ]);
+      scoredList.forEach(entry => {
+        const sitelinks = counts[getQid(entry.person)] || 0;
+        // Add a boost based on sitelinks (cap influence)
+        entry.score += Math.min(200, sitelinks) * 0.1; // each 10 sitelinks -> +1 point, max +20
+        const length = lengths[getTitle(entry.person)] || 0;
+        // Longer article -> more notable (weaker signal than sitelinks, so lower cap)
+        entry.score += Math.min(2.5, length / 80000); // each 80 KB -> +1 point, max +2.5
+      });
+      scoredList.sort((a, b) => b.score - a.score);
+
+      // Reference counts need the full article wikitext (~35 KB each), so only fetch them
+      // for the strongest candidates instead of all births.
+      const shortlist = scoredList.slice(0, REFERENCE_CANDIDATES);
+      const refCounts = await fetchReferenceCounts(shortlist.map(e => getTitle(e.person)).filter(Boolean));
+      shortlist.forEach(entry => {
+        const refs = refCounts[getTitle(entry.person)] || 0;
+        // More citations -> better documented, more notable (between sitelinks and length)
+        entry.score += Math.min(5, refs / 50); // each 50 references -> +1 point, max +5
+      });
+      shortlist.sort((a, b) => b.score - a.score);
+      return shortlist;
     }
 
     // Run refinement and pick final top 6
-    const refined = await refineTopCandidates(scored, 20);
+    const refined = await refineCandidates(scored);
     const top6 = refined.slice(0, 6).map(s => s.person);
 
     // Display the top 6 most viewed in the console
