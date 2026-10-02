@@ -217,17 +217,15 @@ main {
     object-fit: cover;
     object-position: center top;
     display: block;
-    filter: grayscale(100%) contrast(1.02);
     opacity: 0;
     transform: scale(1.04);
-    transition: filter 0.6s ease, transform 0.9s ease, opacity 0.6s ease;
+    transition: transform 0.9s ease, opacity 0.6s ease;
 }
 
 .card img.loaded { opacity: 1; }
 
 .card:hover img,
 .card:focus-visible img {
-    filter: grayscale(0%);
     transform: scale(1.0);
 }
 

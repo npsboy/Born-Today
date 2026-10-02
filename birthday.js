@@ -73,6 +73,9 @@ function getName(person) {
 }
 const OFFICE_REGEX = /\b((?:Deputy |Vice[- ])?(?:Prime Minister|President|Premier|Chancellor)\b[^,]*)/i;
 
+const NOBEL_REGEX = /\bNobel\b/i;
+const ACHIEVEMENT_BOOST = 3;
+
 function wordCount(str) {
     return str ? str.split(/\s+/).filter(Boolean).length : 0;
 }
@@ -160,9 +163,10 @@ function computeImportance(person) {
   // description presence
   if (getDescription(person)) score += 2;
 
-  // extract length (longer extract -> likely more notable)
-  const extract = (person.pages && person.pages[0] && person.pages[0].extract) || '';
-  score += Math.min(4, Math.floor(extract.length / 200));
+  // achievement boost: Nobel laureates and heads of state/government
+  const blurb = (person.text || '') + ' ' + (getWikiDescription(person) || '');
+  if (NOBEL_REGEX.test(blurb)) score += ACHIEVEMENT_BOOST;
+  if (OFFICE_REGEX.test(blurb)) score += ACHIEVEMENT_BOOST;
 
   return score;
 }
